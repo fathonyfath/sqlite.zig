@@ -3,9 +3,16 @@ const c = @cImport({
     @cInclude("sqlite3.h");
 });
 
+/// A wrapper around a SQLite database connection.
 pub const Sqlite = struct {
     sqlite_ref: *c.sqlite3,
 
+    /// Opens a SQLite database connection.
+    ///
+    /// The `filename` parameter specifies the path to the database file.
+    /// If the file does not exist, it will be created.
+    ///
+    /// Returns a `Sqlite` instance on success, or an error on failure.
     pub fn open(filename: []const u8) !Sqlite {
         var db: ?*c.sqlite3 = null;
         const result = c.sqlite3_open(filename.ptr, &db);
@@ -15,11 +22,18 @@ pub const Sqlite = struct {
         return error.OpenDatabaseError;
     }
 
+    /// Closes a SQLite database connection.
     pub fn close(db: *Sqlite) void {
         _ = c.sqlite3_close(db.sqlite_ref);
         db.sqlite_ref = undefined;
     }
 
+    /// Prepares an SQL statement for execution.
+    ///
+    /// The `query` parameter specifies the SQL statement to prepare.
+    /// The `extras` parameter is optional and can be used to provide additional information about the query.
+    ///
+    /// Returns a `Statement` instance on success, or an error on failure.
     pub fn prepare(db: Sqlite, query: []const u8, extras: ?ExtraResults) !Statement {
         var stmt: ?*c.sqlite3_stmt = null;
         var leftover: ?[*:0]const u8 = null;
@@ -72,23 +86,27 @@ pub const Sqlite = struct {
     }
 };
 
+/// A wrapper around a prepared SQLite statement.
 pub const Statement = struct {
     sqlite_ref: *c.sqlite3,
     stmt_ref: *c.sqlite3_stmt,
 
+    /// Destroys a prepared statement object.
     pub fn finalize(stmt: Statement) void {
         _ = c.sqlite3_finalize(stmt.stmt_ref);
     }
 
+    /// Resets a prepared statement object.
     pub fn reset(stmt: Statement) void {
         _ = c.sqlite3_reset(stmt.stmt_ref);
     }
 
+    /// Executes the next step of a prepared statement.
     pub fn step(stmt: Statement) ?Result {
         const result = c.sqlite3_step(stmt.stmt_ref);
         if (result == c.SQLITE_ROW) {
             return Result{ .row = .{ .stmt = stmt } };
-        } else if (result == c.SQLITE_ROW) {
+        } else if (result == c.SQLITE_DONE) {
             return Result{ .done = void{} };
         } else if (result == c.SQLITE_BUSY) {
             return Result{ .busy = void{} };
@@ -97,6 +115,7 @@ pub const Statement = struct {
         }
     }
 
+    /// Advances to the next row in the result set.
     pub fn nextRow(stmt: Statement) ?Result.Row {
         if (stmt.step()) |result| {
             if (result == .row) return result.row;
@@ -104,12 +123,20 @@ pub const Statement = struct {
         return null;
     }
 
+    /// Binds values to the parameters of a prepared statement.
+    ///
+    /// The `values` parameter must be a struct with fields that correspond to the parameters in the SQL statement.
+    /// The fields will be bound to the parameters in the order they are declared in the struct.
     pub fn bindValues(stmt: Statement, values: anytype) void {
         inline for (std.meta.fields(@TypeOf(values)), 1..) |field, index| {
             stmt.bindValue(index, @field(values, field.name));
         }
     }
 
+    /// Binds a value to a parameter of a prepared statement.
+    ///
+    /// The `index` parameter specifies the index of the parameter to bind to (starting from 1).
+    /// The `value` parameter specifies the value to bind.
     pub fn bindValue(stmt: Statement, index: usize, value: anytype) void {
         const type_info = @typeInfo(@TypeOf(value));
         switch (type_info) {
@@ -142,6 +169,7 @@ pub const Statement = struct {
         }
     }
 
+    /// Returns the SQL text of a prepared statement with bound parameters expanded.
     pub fn expandedSql(stmt: Statement) []const u8 {
         return std.mem.span(c.sqlite3_expanded_sql(stmt.stmt_ref));
     }
@@ -167,18 +195,25 @@ pub const Statement = struct {
     }
 };
 
+/// Represents the result of executing a prepared statement.
 pub const Result = union(enum) {
+    /// A row of data was returned.
     row: Row,
+    /// The database is busy.
     busy: void,
+    /// The statement has been executed successfully.
     done: void,
 
+    /// Represents a row of data returned by a query.
     pub const Row = struct {
         stmt: Statement,
 
+        /// Returns the value of the column at the given index as an integer.
         pub fn int(row: Row, index: usize) i64 {
             return @intCast(c.sqlite3_column_int64(row.stmt.stmt_ref, @intCast(index)));
         }
 
+        /// Returns the value of the column at the given index as a nullable integer.
         pub fn nullableInt(row: Row, index: usize) ?i64 {
             if (c.sqlite3_column_type(row.stmt.stmt_ref, @intCast(index)) != c.SQLITE_NULL) {
                 return row.int(index);
@@ -187,10 +222,12 @@ pub const Result = union(enum) {
             }
         }
 
+        /// Returns the value of the column at the given index as a float.
         pub fn float(row: Row, index: usize) f64 {
             return @floatCast(c.sqlite3_column_double(row.stmt.stmt_ref, @intCast(index)));
         }
 
+        /// Returns the value of the column at the given index as a nullable float.
         pub fn nullableFloat(row: Row, index: usize) ?f64 {
             if (c.sqlite3_column_type(row.stmt.stmt_ref, @intCast(index)) != c.SQLITE_NULL) {
                 return row.float(index);
@@ -199,6 +236,7 @@ pub const Result = union(enum) {
             }
         }
 
+        /// Returns the value of the column at the given index as a text string.
         pub fn text(row: Row, index: usize) []const u8 {
             const bytes = c.sqlite3_column_bytes(row.stmt.stmt_ref, @intCast(index));
             if (bytes == 0) {
@@ -209,6 +247,7 @@ pub const Result = union(enum) {
             return data[0..@intCast(bytes)];
         }
 
+        /// Returns the value of the column at the given index as a nullable text string.
         pub fn nullableText(row: Row, index: usize) ?[]const u8 {
             if (c.sqlite3_column_type(row.stmt.stmt_ref, @intCast(index)) != c.SQLITE_NULL) {
                 return row.text(index);
@@ -217,6 +256,7 @@ pub const Result = union(enum) {
             }
         }
 
+        /// Returns the value of the column at the given index as a blob.
         pub fn blob(row: Row, index: usize) Blob {
             const bytes = c.sqlite3_column_bytes(row.stmt.stmt_ref, @intCast(index));
             if (bytes == 0) {
@@ -228,6 +268,7 @@ pub const Result = union(enum) {
             return Blob{ .content = content };
         }
 
+        /// Returns the value of the column at the given index as a nullable blob.
         pub fn nullableBlob(row: Row, index: usize) ?Blob {
             if (c.sqlite3_column_type(row.stmt.stmt_ref, @intCast(index)) != c.SQLITE_NULL) {
                 return row.blob(index);
@@ -236,6 +277,10 @@ pub const Result = union(enum) {
             }
         }
 
+        /// Reads the current row into a struct.
+        ///
+        /// The `Type` parameter must be a struct with fields that correspond to the columns in the result set.
+        /// The fields will be populated with the values from the columns in the order they are declared in the struct.
         pub fn read(row: Row, comptime Type: type) Type {
             const type_info = @typeInfo(Type);
             const column_size: usize = @intCast(c.sqlite3_column_count(row.stmt.stmt_ref));
@@ -297,12 +342,16 @@ pub const Result = union(enum) {
     };
 };
 
+/// Represents a blob of data.
 pub const Blob = struct {
     content: []const u8,
 };
 
+/// Contains extra results from preparing a statement.
 pub const ExtraResults = struct {
+    /// If an error occurs, this field will be populated with the error message.
     error_msg: ?*[]const u8 = null,
+    /// If the query contains more than one statement, this field will be populated with the remaining SQL.
     leftover_query: ?*[]const u8 = null,
 };
 
@@ -310,6 +359,7 @@ test {
     var db = try Sqlite.open(":memory:");
     defer db.close();
 
+    // Create table query
     {
         var create_stmt = try db.prepare(
             \\
@@ -328,6 +378,7 @@ test {
         _ = create_stmt.step();
     }
 
+    // Insert table query
     {
         const alloc = std.testing.allocator;
         inline for (0..10) |i| {
@@ -337,6 +388,7 @@ test {
         }
     }
 
+    // Select query using read column with index
     {
         var select_stmt = try db.prepare(
             \\SELECT * FROM sample_table;
@@ -365,6 +417,7 @@ test {
         }
     }
 
+    // Select query using write to structure data
     {
         var select_alt_stmt = try db.prepare(
             \\SELECT * FROM sample_table;
