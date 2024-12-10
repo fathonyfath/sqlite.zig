@@ -86,10 +86,12 @@ pub const Statement = struct {
 
     pub fn step(stmt: Statement) ?Result {
         const result = c.sqlite3_step(stmt.stmt_ref);
-        if (result == c.SQLITE_DONE) {
-            return Result{ .done = void{} };
-        } else if (result == c.SQLITE_ROW) {
+        if (result == c.SQLITE_ROW) {
             return Result{ .row = .{ .stmt = stmt } };
+        } else if (result == c.SQLITE_ROW) {
+            return Result{ .done = void{} };
+        } else if (result == c.SQLITE_BUSY) {
+            return Result{ .busy = void{} };
         } else {
             return null;
         }
@@ -167,6 +169,7 @@ pub const Statement = struct {
 
 pub const Result = union(enum) {
     row: Row,
+    busy: void,
     done: void,
 
     pub const Row = struct {
@@ -177,7 +180,7 @@ pub const Result = union(enum) {
         }
 
         pub fn nullableInt(row: Row, index: usize) ?i64 {
-            if (c.sqlite3_column_type(row.stmt.stmt_ref, @intCast(index)) == c.SQLITE_INTEGER) {
+            if (c.sqlite3_column_type(row.stmt.stmt_ref, @intCast(index)) != c.SQLITE_NULL) {
                 return row.int(index);
             } else {
                 return null;
@@ -189,7 +192,7 @@ pub const Result = union(enum) {
         }
 
         pub fn nullableFloat(row: Row, index: usize) ?f64 {
-            if (c.sqlite3_column_type(row.stmt.stmt_ref, @intCast(index)) == c.SQLITE_FLOAT) {
+            if (c.sqlite3_column_type(row.stmt.stmt_ref, @intCast(index)) != c.SQLITE_NULL) {
                 return row.float(index);
             } else {
                 return null;
@@ -207,7 +210,7 @@ pub const Result = union(enum) {
         }
 
         pub fn nullableText(row: Row, index: usize) ?[]const u8 {
-            if (c.sqlite3_column_type(row.stmt.stmt_ref, @intCast(index)) == c.SQLITE_TEXT) {
+            if (c.sqlite3_column_type(row.stmt.stmt_ref, @intCast(index)) != c.SQLITE_NULL) {
                 return row.text(index);
             } else {
                 return null;
@@ -226,7 +229,7 @@ pub const Result = union(enum) {
         }
 
         pub fn nullableBlob(row: Row, index: usize) ?Blob {
-            if (c.sqlite3_column_type(row.stmt.stmt_ref, @intCast(index)) == c.SQLITE_BLOB) {
+            if (c.sqlite3_column_type(row.stmt.stmt_ref, @intCast(index)) != c.SQLITE_NULL) {
                 return row.blob(index);
             } else {
                 return null;
@@ -250,13 +253,13 @@ pub const Result = union(enum) {
             var result: Type = undefined;
 
             inline for (struct_type_info.fields, 0..) |field, index| {
-                @field(result, field.name) = row.readField(field.type, index).?;
+                @field(result, field.name) = row.readField(field.type, index);
             }
 
             return result;
         }
 
-        fn readField(row: Row, comptime FieldType: type, index: usize) ?FieldType {
+        fn readField(row: Row, comptime FieldType: type, index: usize) FieldType {
             const field_type_info = @typeInfo(FieldType);
 
             switch (field_type_info) {
@@ -274,7 +277,7 @@ pub const Result = union(enum) {
                     u8 => return row.text(index),
                     else => @compileError("Cannot read a value with the type of " ++ @typeName(FieldType)),
                 },
-                .Optional => |opt| return row.readField(opt.child, index),
+                .Optional => |opt| return row.readOptionalField(opt.child, index),
                 .Struct => {
                     if (FieldType == Blob) {
                         return row.blob(index);
@@ -282,6 +285,14 @@ pub const Result = union(enum) {
                 },
                 else => @compileError("Cannot read a value with the type of " ++ @typeName(FieldType)),
             }
+        }
+
+        fn readOptionalField(row: Row, comptime FieldType: type, index: usize) FieldType {
+            if (c.sqlite3_column_type(row.stmt.stmt_ref, @intCast(index)) == c.SQLITE_NULL) {
+                return null;
+            }
+
+            return row.readField(FieldType, index);
         }
     };
 };
