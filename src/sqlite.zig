@@ -301,7 +301,16 @@ test {
 
     {
         var create_stmt = try db.prepare(
-            "CREATE TABLE IF NOT EXISTS sample_table (id INTEGER PRIMARY KEY AUTOINCREMENT, number_1 REAL NOT NULL, number_2 INTEGER NOT NULL, text TEXT NOT NULL, blob BLOB NOT NULL);",
+            \\
+            \\CREATE TABLE IF NOT EXISTS sample_table(
+            \\id INTEGER PRIMARY KEY AUTOINCREMENT, 
+            \\number_1 REAL NOT NULL, 
+            \\number_2 INTEGER NOT NULL, 
+            \\text TEXT NOT NULL, 
+            \\blob BLOB NOT NULL
+            \\);
+            \\
+        ,
             null,
         );
         defer create_stmt.reset();
@@ -325,13 +334,23 @@ test {
         );
         defer select_stmt.finalize();
 
-        while (select_stmt.nextRow()) |row| {
-            const id = row.int(0);
-            const number_1 = row.int(1);
-            const number_2 = row.float(2);
-            const text = row.text(3);
-            const blob = row.blob(4);
-            std.debug.print("{d} - {d} {d} {s} {any}\n", .{ id, number_1, number_2, text, blob });
+        var id: usize = 1;
+        var index: usize = 0;
+
+        const alloc = std.testing.allocator;
+
+        while (select_stmt.nextRow()) |row| : ({
+            id += 1;
+            index += 1;
+        }) {
+            const text = try std.fmt.allocPrint(alloc, "Index {d}", .{index});
+            defer alloc.free(text);
+
+            try std.testing.expectEqual(@as(i64, @intCast(id)), row.int(0));
+            try std.testing.expectEqual(@as(i64, @intCast(index)), row.int(1));
+            try std.testing.expectEqual(@as(f64, @floatFromInt(index)) + 0.99, row.float(2));
+            try std.testing.expectEqualSlices(u8, text, row.text(3));
+            try std.testing.expectEqualDeep(Blob{ .content = text }, row.blob(4));
         }
     }
 
@@ -343,7 +362,15 @@ test {
         );
         defer select_alt_stmt.finalize();
 
-        while (select_alt_stmt.nextRow()) |row| {
+        var id: usize = 1;
+        var index: usize = 0;
+
+        const alloc = std.testing.allocator;
+
+        while (select_alt_stmt.nextRow()) |row| : ({
+            id += 1;
+            index += 1;
+        }) {
             const QueryResult = struct {
                 id: i64,
                 number_1: i64,
@@ -352,7 +379,20 @@ test {
                 blob: Blob,
             };
             const result = row.read(QueryResult);
-            std.debug.print("{any}\n", .{result});
+
+            const text = try std.fmt.allocPrint(alloc, "Index {d}", .{index});
+            defer alloc.free(text);
+
+            try std.testing.expectEqualDeep(
+                QueryResult{
+                    .id = @intCast(id),
+                    .number_1 = @intCast(index),
+                    .number_2 = @as(f64, @floatFromInt(index)) + 0.99,
+                    .text = text,
+                    .blob = Blob{ .content = text },
+                },
+                result,
+            );
         }
     }
 }
