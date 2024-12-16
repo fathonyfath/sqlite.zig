@@ -26,6 +26,17 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
 
+    const lib_check = b.addStaticLibrary(.{
+        .name = "sqlite.zig",
+        .root_source_file = b.path("src/sqlite.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addSqliteDependencies(b, lib_check);
+
+    const check_step = b.step("check", "Check if sqlite.zig is compiles");
+    check_step.dependOn(&lib_check.step);
+
     _ = b.addModule("sqlite", .{
         .root_source_file = b.path("src/sqlite.zig"),
         .target = target,

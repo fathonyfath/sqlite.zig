@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @cImport({
     @cInclude("sqlite3.h");
 });
+const Allocator = std.mem.Allocator;
 
 /// A wrapper around a SQLite database connection.
 pub const Sqlite = struct {
@@ -99,6 +100,39 @@ pub const Sqlite = struct {
         if (result != c.SQLITE_OK) {
             return error.SqliteExecError;
         }
+    }
+
+    /// Executes an SQL statement, returning an allocated error message on failure.
+    ///
+    /// The `alloc` parameter specifies the allocator to use for allocating the error message.
+    /// The `query` parameter specifies the SQL statement to execute.
+    ///
+    /// This function is useful for executing SQL statements that do not return any data,
+    /// such as `CREATE TABLE` or `INSERT`. For statements that return data, use the
+    /// `Sqlite.prepare` and `Statement.step` functions.
+    ///
+    /// Returns an optional allocated error message. If the operation is successful,
+    /// `null` is returned. If an error occurs, an allocated error message is returned,
+    /// which is owned by the caller and must be freed using the provided allocator when no longer needed.
+    pub fn execWithError(db: Sqlite, alloc: std.mem.Allocator, query: []const u8) !?[]const u8 {
+        var err_msg: ?[*:0]u8 = null;
+        const result = c.sqlite3_exec(db.sqlite_ref, query.ptr, null, null, &err_msg);
+
+        if (result != c.SQLITE_OK) {
+            if (err_msg) |msg| {
+                const zig_msg: []const u8 = std.mem.sliceTo(msg, 0);
+                const msg_copy = try alloc.dupe(u8, zig_msg);
+                c.sqlite3_free(msg);
+                return msg_copy;
+            }
+        }
+        return null;
+    }
+
+    /// Returns the Row ID of the most recent successful INSERT into the database from the database connection in the first argument.
+    /// If no successful INSERTs have ever occurred on that database connection, zero is returned.
+    pub fn lastInsertRowId(db: Sqlite) i64 {
+        return c.sqlite3_last_insert_rowid(db.sqlite_ref);
     }
 };
 
@@ -398,6 +432,9 @@ test {
             defer alloc.free(text);
             try insertTestRow(db, i, text);
         }
+
+        const row_id = db.lastInsertRowId();
+        try std.testing.expectEqual(10, row_id);
     }
 
     // Select query using read column with index
@@ -490,4 +527,17 @@ fn insertTestRow(db: Sqlite, number: i32, text: []const u8) !void {
 
     stmt.bindValues(values);
     _ = stmt.step();
+}
+
+test "execWithError API" {
+    var sqlite = try Sqlite.open(":memory:");
+    defer sqlite.close();
+
+    const allocator = std.testing.allocator;
+
+    const err_msg = try sqlite.execWithError(allocator, "RANDOM SYNTAX IT SHOULD PRINT ERROR;");
+    if (err_msg) |msg| {
+        defer allocator.free(msg);
+        try std.testing.expectEqualStrings("near \"RANDOM\": syntax error", msg);
+    }
 }
