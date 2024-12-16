@@ -84,6 +84,22 @@ pub const Sqlite = struct {
 
         return error.PrepareStatementError;
     }
+
+    /// Executes an SQL statement.
+    ///
+    /// The `query` parameter specifies the SQL statement to execute.
+    ///
+    /// This function is useful for executing SQL statements that do not return any data, such as `CREATE TABLE` or `INSERT`.
+    /// For statements that return data, use the `Sqlite.prepare` and `Statement.step` functions.
+    ///
+    /// Returns an error on failure.
+    pub fn exec(db: Sqlite, query: []const u8) !void {
+        const result = c.sqlite3_exec(db.sqlite_ref, query.ptr, null, null, null);
+
+        if (result != c.SQLITE_OK) {
+            return error.SqliteExecError;
+        }
+    }
 };
 
 /// A wrapper around a prepared SQLite statement.
@@ -361,7 +377,7 @@ test {
 
     // Create table query
     {
-        var create_stmt = try db.prepare(
+        _ = try db.exec(
             \\
             \\CREATE TABLE IF NOT EXISTS sample_table(
             \\id INTEGER PRIMARY KEY AUTOINCREMENT, 
@@ -371,11 +387,7 @@ test {
             \\blob BLOB NOT NULL
             \\);
             \\
-        ,
-            null,
         );
-        defer create_stmt.reset();
-        _ = create_stmt.step();
     }
 
     // Insert table query
